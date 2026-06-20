@@ -1,4 +1,4 @@
-# Source Code for the Proposed Framework
+# YOLO11n-pose + CSDI (Temporal U-Net) + hypergraph learning
 
 PyTorch implementation of the framework described in:
 
