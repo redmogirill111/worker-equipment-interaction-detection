@@ -74,24 +74,22 @@ class DynamicTemporalConv(nn.Module):
 
     Z^(st) = Conv1D_theta(Z^(s))
 
-    Uses adaptive kernel sizes for dynamic receptive fields.
+    The convolutional kernel size is a dynamically generated and adaptively
+    adjusted hyperparameter, achieving a dynamic, continuous receptive field.
     """
 
     def __init__(self, channels: int, kernel_sizes: list = None):
         super().__init__()
         if kernel_sizes is None:
             kernel_sizes = [3, 5, 7]
+        self.kernel_sizes = kernel_sizes
         self.convs = nn.ModuleList()
-        # Ensure channels is evenly divisible; use remainder allocation
-        n_kernels = len(kernel_sizes)
-        ch_per = channels // n_kernels
-        ch_list = [ch_per] * (n_kernels - 1) + [channels - ch_per * (n_kernels - 1)]
-        for ks, ch_out in zip(kernel_sizes, ch_list):
+        for ks in kernel_sizes:
             padding = ks // 2
-            self.convs.append(nn.Conv1d(channels, ch_out, kernel_size=ks, padding=padding))
+            self.convs.append(nn.Conv1d(channels, channels, kernel_size=ks, padding=padding))
 
         self.bn = nn.BatchNorm1d(channels)
-        # Adaptive kernel weight generator
+        # Adaptive kernel weight generator: dynamically selects/weights kernels
         self.kernel_selector = nn.Linear(channels, len(kernel_sizes))
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
@@ -102,16 +100,18 @@ class DynamicTemporalConv(nn.Module):
             out: Spatio-temporal feature tensor (B, T, V, C)
         """
         B, T, V, C = x.shape
+        x_perm = x.permute(0, 2, 3, 1).reshape(B * V, C, T)  # (B*V, C, T)
 
-        # Apply multiple kernel sizes and concatenate
-        outputs = []
-        for conv in self.convs:
-            x_perm = x.permute(0, 2, 3, 1).reshape(B * V, C, T)  # (B*V, C, T)
-            out = conv(x_perm)  # (B*V, C//K, T)
-            outputs.append(out)
+        # Dynamic kernel selection: compute attention weights from input statistics
+        pooled = x.mean(dim=(1, 2))  # (B, C)
+        weights = F.softmax(self.kernel_selector(pooled), dim=-1)  # (B, num_kernels)
 
-        # Concatenate along channel dimension
-        out = torch.cat(outputs, dim=1)  # (B*V, C, T)
+        # Apply each kernel and dynamically weight
+        out = torch.zeros_like(x_perm)  # (B*V, C, T)
+        for i, conv in enumerate(self.convs):
+            w = weights[:, i]  # (B,)
+            w = w.unsqueeze(1).unsqueeze(2).expand(-1, V, 1).reshape(B * V, 1, 1)  # (B*V, 1, 1)
+            out = out + conv(x_perm) * w
 
         # BN + activation
         out = self.bn(out)
@@ -252,9 +252,7 @@ class ActionClassifier(nn.Module):
 
     def __init__(self, in_channels: int, num_classes: int):
         super().__init__()
-        self.gap = nn.AdaptiveAvgPool2d((1, 1))  # GAP over V and T
         self.fc = nn.Linear(in_channels, num_classes)
-        self.dropout = nn.Dropout(0.5)
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """
@@ -269,7 +267,6 @@ class ActionClassifier(nn.Module):
         z_bar = x.mean(dim=(1, 2))  # (B, C) — average over T and V
 
         # Fully connected layer (Eq. 11)
-        z_bar = self.dropout(z_bar)
         logits = self.fc(z_bar)  # (B, K)
 
         return logits
