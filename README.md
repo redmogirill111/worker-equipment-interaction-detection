@@ -139,4 +139,4 @@ logits = model(x_repaired, H)  # (B, 13)
 
 ## License
 
-Code released for academic reproducibility. Dataset available upon reasonable request after 04/30/2027.
+Code released for academic reproducibility. Dataset available upon reasonable request after 08/31/2027.
